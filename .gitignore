@@ -2,3 +2,14 @@ sources/
 logs/
 artifacts/
 __pycache__/
+
+# Local service data and credentials must never be published.
+.env
+.env.*
+secrets.env
+state/
+home/
+automation-home/
+backups/
+*.bundle
+.ruff_cache/

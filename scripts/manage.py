@@ -40,7 +40,7 @@ def prepare(target):
         raise RuntimeError("Target must not exist; refusing to overwrite a checkout")
     # Copy only versioned bundle inputs, never local state, caches or credentials.
     target.mkdir(parents=True)
-    for name in ["manifest.json", "Dockerfile", ".dockerignore", ".gitignore", ".gitattributes", "compose.custom.yaml", "README.md", "VERIFICATION.md"]:
+    for name in ["manifest.json", "Dockerfile", ".dockerignore", ".gitignore", ".gitattributes", "compose.custom.yaml", "README.md", "VERIFICATION.md", "TODO.md"]:
         shutil.copy2(ROOT / name, target / name)
     for name in ["scripts", "patches"]:
         shutil.copytree(ROOT / name, target / name, ignore=shutil.ignore_patterns("__pycache__"))
