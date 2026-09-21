@@ -1,0 +1,8 @@
+# Explicit opt-in only: never auto-loaded by Docker Compose.
+services:
+  server:
+    image: local/openhands-canvas:1.20.0-sdk1.49.1-system-prompt.1
+  canvas:
+    image: local/openhands-canvas:1.20.0-sdk1.49.1-system-prompt.1
+  automation:
+    image: local/openhands-canvas:1.20.0-sdk1.49.1-system-prompt.1

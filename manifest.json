@@ -1,0 +1,26 @@
+{
+  "patch_revision": 1,
+  "base_image": "ghcr.io/openhands/agent-canvas:1.20.0@sha256:7c3d078f408dbc75233a098b63bb3f3cda475ee5d0024d8b934e148c8f063638",
+  "node_image": "node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf",
+  "image": "local/openhands-canvas:1.20.0-sdk1.49.1-system-prompt.1",
+  "sources": {
+    "sdk": {
+      "url": "https://github.com/OpenHands/software-agent-sdk.git",
+      "commit": "632894b716ef3f4b44932bdfadb61b414c64c8d9",
+      "patch": "patches/sdk.patch",
+      "patch_sha256": "58d22156a6ab78c7adaba048dd4ec3d5e3ab441bf24522b9ca424e837d98ff27"
+    },
+    "canvas": {
+      "url": "https://github.com/OpenHands/OpenHands.git",
+      "commit": "9737f713616a1e452f822c2967f0e2c8bf2dc308",
+      "patch": "patches/canvas.patch",
+      "patch_sha256": "5dbb770391d35ec073f6bd989adf031d9f286787b9d681b4e3a134d6606c70db"
+    },
+    "openhands-docs": {
+      "url": "https://github.com/OpenHands/docs.git",
+      "commit": "450c8a64cd81f371a0cf930358fc185448005ee4",
+      "patch": "patches/docs.patch",
+      "patch_sha256": "5d8058ea317fdb9c6981cf079a87e955f3c66c98280b6ba62526daed3e4559a4"
+    }
+  }
+}

@@ -1,0 +1,182 @@
+diff --git a/openhands-sdk/openhands/sdk/profiles/agent_profile.py b/openhands-sdk/openhands/sdk/profiles/agent_profile.py
+index 78f7e5dbaf500f721a13f335fc262349b8e41733..93a827c3a6fa9303ea3acc43d7bf152beff40683 100644
+--- a/openhands-sdk/openhands/sdk/profiles/agent_profile.py
++++ b/openhands-sdk/openhands/sdk/profiles/agent_profile.py
+@@ -174,6 +174,14 @@ class OpenHandsAgentProfile(AgentProfileBase):
+         ),
+     )
+ 
++    system_prompt: str | None = Field(
++        default=None,
++        description=(
++            "Replace the built-in static system prompt verbatim. None uses the "
++            "SDK default; an empty string intentionally removes the base prompt. "
++            "Agent context, skills and system_message_suffix remain separate."
++        ),
++    )
+     system_message_suffix: str | None = Field(
+         default=None,
+         description="Optional suffix appended to the system prompt.",
+diff --git a/openhands-sdk/openhands/sdk/profiles/resolver.py b/openhands-sdk/openhands/sdk/profiles/resolver.py
+index 4fb26297e2bf0f5cf00f12815814df22f134b957..77c9ae755946e22209e93050f25f3914a18a2a90 100644
+--- a/openhands-sdk/openhands/sdk/profiles/resolver.py
++++ b/openhands-sdk/openhands/sdk/profiles/resolver.py
+@@ -245,6 +245,7 @@ def _build_openhands_settings(
+         "schema_version": AGENT_SETTINGS_SCHEMA_VERSION,
+         "agent_kind": "openhands",
+         "agent": profile.agent,
++        "system_prompt": profile.system_prompt,
+         "llm": llm,
+         "mcp_config": mcp_config,
+         # Tri-state passthrough; create_agent materializes None.
+diff --git a/openhands-sdk/openhands/sdk/profiles/seed.py b/openhands-sdk/openhands/sdk/profiles/seed.py
+index e9cce1f13a77d423a0a6539f89afeba7215e5cc8..a0a380712bb2f4d6301abdbbdc6627e85cb5888b 100644
+--- a/openhands-sdk/openhands/sdk/profiles/seed.py
++++ b/openhands-sdk/openhands/sdk/profiles/seed.py
+@@ -70,6 +70,7 @@ def build_seed_profile(
+         # are frozen, so nothing can dangle at launch (the freeze-by-name seed
+         # was the #4017 launch-break; the deny-list removes that failure mode).
+         disabled_skills=[],
++        system_prompt=agent_settings.system_prompt,
+         system_message_suffix=context.system_message_suffix,
+         condenser=agent_settings.condenser,
+         verification=build_profile_verification(agent_settings.verification),
+diff --git a/openhands-sdk/openhands/sdk/settings/model.py b/openhands-sdk/openhands/sdk/settings/model.py
+index 5bac9b061ec17e4f94a3bad335a466ec1045d83d..d284c8e14d89c988e3452139fd12719b3f457757 100644
+--- a/openhands-sdk/openhands/sdk/settings/model.py
++++ b/openhands-sdk/openhands/sdk/settings/model.py
+@@ -1242,6 +1242,14 @@ class OpenHandsAgentSettings(AgentSettingsBase):
+     the default ``Agent`` (LLM + tools + MCP + condenser + critic).
+     """
+ 
++    system_prompt: str | None = Field(
++        default=None,
++        description=(
++            "Replace the built-in static system prompt verbatim. None uses the "
++            "SDK default; an empty string intentionally removes the base prompt. "
++            "Agent context, skills and system_message_suffix remain separate."
++        ),
++    )
+     agent_kind: Literal["openhands"] = Field(
+         default="openhands",
+         description=(
+@@ -1415,6 +1423,7 @@ class OpenHandsAgentSettings(AgentSettingsBase):
+         llm = create_subscription_llm_from_config(self.llm)
+         condenser = self.build_condenser(llm)
+         return Agent(
++            system_prompt=self.system_prompt,
+             llm=llm,
+             tools=tools,
+             mcp_config=self.mcp_config,
+diff --git a/tests/agent_server/test_agent_profiles_router.py b/tests/agent_server/test_agent_profiles_router.py
+index 735be213769dd386499f1f5c9c32f05ac0776d0f..7701e0ce1064905a217a97caaddc877cbc5c5316 100644
+--- a/tests/agent_server/test_agent_profiles_router.py
++++ b/tests/agent_server/test_agent_profiles_router.py
+@@ -987,3 +987,27 @@ def test_materialize_no_raw_secrets_in_resolved_settings(
+     body = response.json()
+     assert body["valid"] is True
+     assert raw_key not in response.text
++
++
++@pytest.mark.parametrize(
++    "prompt", [None, "", "Корпус: {{ verbatim }}\nOnly sources.\n"]
++)
++def test_custom_prompt_api_roundtrip(client, store, prompt):
++    response = client.post(
++        "/api/agent-profiles/corpus",
++        json={
++            "agent_kind": "openhands",
++            "llm_profile_ref": "test",
++            "system_prompt": prompt,
++        },
++    )
++    assert response.status_code == 201
++    loaded = client.get("/api/agent-profiles/corpus").json()["profile"]
++    assert loaded["system_prompt"] == prompt
++    assert store.load("corpus").system_prompt == prompt
++    # ACP schemas continue rejecting an OpenHands-only prompt override.
++    invalid = client.post(
++        "/api/agent-profiles/acp-prompt",
++        json={"agent_kind": "acp", "acp_server": "codex", "system_prompt": prompt},
++    )
++    assert invalid.status_code == 422
+diff --git a/tests/sdk/profiles/test_resolver.py b/tests/sdk/profiles/test_resolver.py
+index 5282a53e823909a97a8565a0d7d483b5af17a22b..460b9d92d159eef98b108c004c4c7bc85b9799fa 100644
+--- a/tests/sdk/profiles/test_resolver.py
++++ b/tests/sdk/profiles/test_resolver.py
+@@ -955,3 +955,75 @@ def test_dry_run_normalizes_settings_build_failure(
+     assert diag.valid is False
+     assert diag.errors
+     assert diag.resolved_settings is None
++
++
++@pytest.mark.parametrize(
++    "prompt", [None, "", "Корпус: {{ verbatim }}\nUse MCP only.\n"]
++)
++def test_custom_system_prompt_survives_profile_settings_agent_roundtrip(
++    llm_store: LLMProfileStore, tmp_path: Path, prompt: str | None
++) -> None:
++    from openhands.sdk.profiles import AgentProfileStore
++    from openhands.sdk.profiles.seed import build_seed_profile
++
++    store = AgentProfileStore(base_dir=tmp_path / "agents")
++    profile = OpenHandsAgentProfile(
++        name="corpus",
++        llm_profile_ref="default",
++        system_prompt=prompt,
++        system_message_suffix="separate suffix",
++        tools=[],
++    )
++    store.save(profile)
++    loaded = store.load("corpus")
++    settings = resolve_agent_profile(
++        loaded, llm_store=llm_store, mcp_config={}, available_skills=None, cipher=None
++    )
++    assert isinstance(settings, OpenHandsAgentSettings)
++    settings = OpenHandsAgentSettings.model_validate_json(settings.model_dump_json())
++    agent = settings.create_agent()
++    assert isinstance(agent, Agent)
++    assert agent.system_prompt == prompt
++    assert agent.agent_context.system_message_suffix == "separate suffix"
++    expected = (
++        Agent(llm=settings.llm).static_system_message if prompt is None else prompt
++    )
++    assert agent.static_system_message == expected
++    # Sending a message initializes the real Canvas event without running the LLM.
++    from openhands.sdk import Conversation
++    from openhands.sdk.event import SystemPromptEvent
++    from openhands.sdk.workspace import LocalWorkspace
++
++    conversation = Conversation(
++        agent=agent,
++        workspace=LocalWorkspace(working_dir=str(tmp_path)),
++        persistence_dir=str(tmp_path / "conversation"),
++        visualizer=None,
++    )
++    try:
++        conversation.send_message("Initialize only; do not run.")
++        event = next(
++            event
++            for event in conversation.state.events
++            if isinstance(event, SystemPromptEvent)
++        )
++        assert event.system_prompt.text == expected
++        assert event.dynamic_context is not None
++        assert "separate suffix" in event.dynamic_context.text
++    finally:
++        conversation.close()
++    resumed = Agent.model_validate_json(agent.model_dump_json())
++    assert resumed.static_system_message == expected
++    assert build_seed_profile(settings, "default").system_prompt == prompt
++    # Building another profile must not inherit corpus instructions.
++    ordinary = resolve_agent_profile(
++        OpenHandsAgentProfile(name="ordinary", llm_profile_ref="default", tools=[]),
++        llm_store=llm_store,
++        mcp_config={},
++        available_skills=None,
++        cipher=None,
++    ).create_agent()
++    assert ordinary.system_prompt is None
++    assert (
++        ordinary.static_system_message == Agent(llm=settings.llm).static_system_message
++    )

@@ -1,0 +1,4 @@
+sources/
+logs/
+artifacts/
+__pycache__/

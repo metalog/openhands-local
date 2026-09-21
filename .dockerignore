@@ -1,0 +1,9 @@
+**/.git
+**/node_modules
+**/__pycache__
+**/.venv
+**/.react-router
+**/build
+sources/openhands-docs
+logs
+artifacts

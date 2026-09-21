@@ -1,0 +1,419 @@
+diff --git a/__tests__/components/settings/agent-profiles/agent-profiles-local-view.test.tsx b/__tests__/components/settings/agent-profiles/agent-profiles-local-view.test.tsx
+index 1e281053ca07cd7e2b948ae38e2e50aefd296723..4f86dad81004887425bf8e431049eb65e1ae71d0 100644
+--- a/__tests__/components/settings/agent-profiles/agent-profiles-local-view.test.tsx
++++ b/__tests__/components/settings/agent-profiles/agent-profiles-local-view.test.tsx
+@@ -154,10 +154,75 @@ describe("AgentProfilesLocalView save mapping", () => {
+         mcp_server_refs: null,
+         enable_sub_agents: true,
+         llm_profile_ref: "default",
++        system_prompt: null,
+       },
+     });
+   });
+ 
++  it.each(["", "Corpus instructions\nUse MCP."])(
++    "saves an explicitly enabled custom prompt verbatim: %j",
++    async (prompt) => {
++      emitControl = {
++        agentType: "openhands",
++        isValid: true,
++        isDirty: true,
++        buildAgentProfileFields: () => ({
++          agent_kind: "openhands",
++          mcp_server_refs: null,
++          enable_sub_agents: false,
++        }),
++        credentials: { isDirty: false, save: vi.fn(), reset: vi.fn() },
++      };
++      render(<AgentProfilesLocalView />);
++      const user = await openCreateAndName("corpus");
++      await user.click(screen.getByTestId("agent-profile-custom-prompt"));
++      if (prompt)
++        await user.type(
++          screen.getByTestId("agent-profile-system-prompt"),
++          prompt,
++        );
++      await user.click(screen.getByTestId("save-agent-profile-btn"));
++      await waitFor(() => expect(saveMutate).toHaveBeenCalledTimes(1));
++      expect(saveMutate.mock.calls[0][0].profile.system_prompt).toBe(prompt);
++    },
++  );
++
++  it("loads a custom prompt and restores the default with null", async () => {
++    vi.mocked(AgentProfilesService.getProfile).mockResolvedValue({
++      name: "default",
++      profile: {
++        agent_kind: "openhands",
++        name: "default",
++        llm_profile_ref: "default",
++        system_prompt: "Corpus only.",
++      },
++    } as never);
++    emitControl = {
++      agentType: "openhands",
++      isValid: true,
++      isDirty: false,
++      buildAgentProfileFields: () => ({
++        agent_kind: "openhands",
++        mcp_server_refs: null,
++        enable_sub_agents: false,
++      }),
++      credentials: { isDirty: false, save: vi.fn(), reset: vi.fn() },
++    };
++    render(<AgentProfilesLocalView />);
++    const user = userEvent.setup();
++    await user.click(screen.getByTestId("edit-agent-profile"));
++    expect(
++      await screen.findByTestId("agent-profile-system-prompt"),
++    ).toHaveValue("Corpus only.");
++    await user.click(screen.getByTestId("agent-profile-custom-prompt"));
++    expect(
++      screen.queryByTestId("agent-profile-system-prompt"),
++    ).not.toBeInTheDocument();
++    await user.click(screen.getByTestId("save-agent-profile-btn"));
++    await waitFor(() => expect(saveMutate).toHaveBeenCalledTimes(1));
++    expect(saveMutate.mock.calls[0][0].profile.system_prompt).toBeNull();
++  });
++
+   it("saves an ACP profile without an llm_profile_ref", async () => {
+     emitControl = {
+       agentType: "acp",
+diff --git a/__tests__/hooks/mutation/use-create-conversation.test.tsx b/__tests__/hooks/mutation/use-create-conversation.test.tsx
+index 6159e71f49a43cdf6a26401353791e8f63079599..5736d4c1c2d1cdb46f65d4788b71e4e67025c404 100644
+--- a/__tests__/hooks/mutation/use-create-conversation.test.tsx
++++ b/__tests__/hooks/mutation/use-create-conversation.test.tsx
+@@ -646,6 +646,93 @@ describe("useCreateConversation", () => {
+     );
+   });
+ 
++  it.each(["", "Corpus only."])(
++    "rejects a model mismatch instead of dropping custom prompt %j",
++    async (prompt) => {
++      listAgentProfilesMock.mockResolvedValue({
++        profiles: [
++          {
++            id: "corpus-id",
++            name: "corpus",
++            agent_kind: "openhands",
++            llm_profile_ref: "pinned",
++          },
++        ],
++        active_agent_profile_id: "corpus-id",
++      });
++      listLlmProfilesMock.mockResolvedValue({
++        profiles: [{ name: "pinned" }, { name: "other" }],
++        active_profile: "other",
++      });
++      getAgentProfileMock.mockResolvedValue({
++        name: "corpus",
++        profile: {
++          agent_kind: "openhands",
++          llm_profile_ref: "pinned",
++          system_prompt: prompt,
++        },
++      });
++      const spy = vi.spyOn(
++        AgentServerConversationService,
++        "createConversation",
++      );
++      spy.mockClear();
++      const { result } = renderHook(() => useCreateConversation(), {
++        wrapper: ({ children }) => (
++          <QueryClientProvider client={new QueryClient()}>
++            {children}
++          </QueryClientProvider>
++        ),
++      });
++      await expect(
++        result.current.mutateAsync({ query: "hello" }),
++      ).rejects.toThrow("custom system prompt");
++      expect(spy).not.toHaveBeenCalled();
++    },
++  );
++
++  it("launches a customized default profile without global-settings fallback", async () => {
++    listAgentProfilesMock.mockResolvedValue({
++      profiles: [
++        {
++          id: "default-id",
++          name: "default",
++          agent_kind: "openhands",
++          llm_profile_ref: "pinned",
++        },
++      ],
++      active_agent_profile_id: "default-id",
++    });
++    listLlmProfilesMock.mockResolvedValue({
++      profiles: [{ name: "pinned" }],
++      active_profile: "pinned",
++    });
++    getAgentProfileMock.mockResolvedValue({
++      name: "default",
++      profile: {
++        agent_kind: "openhands",
++        llm_profile_ref: "pinned",
++        system_prompt: "My default.",
++      },
++    });
++    const spy = vi
++      .spyOn(AgentServerConversationService, "createConversation")
++      .mockResolvedValue({
++        id: "task-id",
++        app_conversation_id: "custom-default",
++        agent_server_url: "http://agent-server.local",
++      } as never);
++    const { result } = renderHook(() => useCreateConversation(), {
++      wrapper: ({ children }) => (
++        <QueryClientProvider client={new QueryClient()}>
++          {children}
++        </QueryClientProvider>
++      ),
++    });
++    await result.current.mutateAsync({ query: "hello" });
++    expect(spy.mock.lastCall?.[0]?.agentProfileId).toBe("default-id");
++  });
++
+   it("honors the home LLM dropdown selection over a named profile's pinned ref (#16539)", async () => {
+     // The home pill shows the account-wide active LLM profile, so when it
+     // differs from the active named profile's pinned llm_profile_ref the
+diff --git a/src/api/agent-profiles-service/agent-profiles-service.api.ts b/src/api/agent-profiles-service/agent-profiles-service.api.ts
+index 530d96f772668c54f0c7a4715e1cb8e07beee0b2..b2ec74160bb8f6e4cc2f18a7612b4cf37203d33f 100644
+--- a/src/api/agent-profiles-service/agent-profiles-service.api.ts
++++ b/src/api/agent-profiles-service/agent-profiles-service.api.ts
+@@ -16,11 +16,11 @@ import {
+   type GetAgentProfileOptions,
+ } from "@openhands/typescript-client/clients";
+ import type {
+-  AgentProfile,
++  AgentProfile as SDKAgentProfile,
+   AgentProfileSummary,
+-  AgentProfileSaveInput,
++  AgentProfileSaveInput as SDKAgentProfileSaveInput,
+   AgentProfileListResponse,
+-  AgentProfileDetailResponse,
++  AgentProfileDetailResponse as SDKAgentProfileDetailResponse,
+   AgentProfileMutationResponse,
+   ActivateAgentProfileResponse,
+   ExposeSecretsMode,
+@@ -49,6 +49,19 @@ function isCloud(): boolean {
+  */
+ export const WELL_KNOWN_DEFAULT_AGENT_PROFILE_NAME = "default";
+ 
++// Local optional extension until the upstream client exposes this SDK field.
++type WithSystemPrompt<T> = T extends { agent_kind: "openhands" }
++  ? T & { system_prompt?: string | null }
++  : T;
++type AgentProfile = WithSystemPrompt<SDKAgentProfile>;
++type AgentProfileSaveInput = WithSystemPrompt<SDKAgentProfileSaveInput>;
++type AgentProfileDetailResponse = Omit<
++  SDKAgentProfileDetailResponse,
++  "profile"
++> & {
++  profile: AgentProfile;
++};
++
+ // Re-export SDK types for consumers.
+ export type {
+   AgentProfile,
+diff --git a/src/components/features/settings/agent-profiles/agent-profiles-local-view.tsx b/src/components/features/settings/agent-profiles/agent-profiles-local-view.tsx
+index e6c92e4d00687570edf790e08643dae348f14a57..8cfcfc68e37d9764c4e10453c03db87de4cc322a 100644
+--- a/src/components/features/settings/agent-profiles/agent-profiles-local-view.tsx
++++ b/src/components/features/settings/agent-profiles/agent-profiles-local-view.tsx
+@@ -97,6 +97,7 @@ export function AgentProfilesLocalView() {
+     SettingsValue
+   > | null>(null);
+   const [llmProfileRef, setLlmProfileRef] = useState("");
++  const [systemPrompt, setSystemPrompt] = useState<string | null>(null);
+   const [saveControl, setSaveControl] =
+     useState<AgentSettingsSaveControl | null>(null);
+   const [isSaving, setIsSaving] = useState(false);
+@@ -133,6 +134,7 @@ export function AgentProfilesLocalView() {
+     setProfileName("");
+     setEditingProfile(null);
+     setOverride({ agent_kind: "openhands" });
++    setSystemPrompt(null);
+     setLlmProfileRef(defaultLlmProfileRef);
+     setSaveControl(null);
+     setViewMode("create");
+@@ -169,6 +171,11 @@ export function AgentProfilesLocalView() {
+         } else {
+           setLlmProfileRef("");
+         }
++        setSystemPrompt(
++          profile.agent_kind === "openhands"
++            ? (profile.system_prompt ?? null)
++            : null,
++        );
+         setProfileName(profile.name);
+         setSaveControl(null);
+         setViewMode("edit");
+@@ -201,7 +208,11 @@ export function AgentProfilesLocalView() {
+           displayErrorToast(t(I18nKey.SETTINGS$AGENT_PROFILE_LLM_REQUIRED));
+           return;
+         }
+-        input = { ...fields, llm_profile_ref: llmProfileRef };
++        input = {
++          ...fields,
++          llm_profile_ref: llmProfileRef,
++          system_prompt: systemPrompt,
++        };
+       } else {
+         input = fields as AgentProfileSaveInput;
+       }
+@@ -260,6 +271,7 @@ export function AgentProfilesLocalView() {
+     saveControl,
+     isNameValid,
+     llmProfileRef,
++    systemPrompt,
+     profileName,
+     viewMode,
+     editingProfile,
+@@ -298,7 +310,12 @@ export function AgentProfilesLocalView() {
+     viewMode === "create" ||
+     Boolean(saveControl?.isDirty) ||
+     nameDirty ||
+-    llmRefDirty;
++    llmRefDirty ||
++    (isOpenHands &&
++      systemPrompt !==
++        (editingProfile?.agent_kind === "openhands"
++          ? (editingProfile.system_prompt ?? null)
++          : null));
+ 
+   return (
+     <div className="flex flex-col gap-6">
+@@ -335,6 +352,35 @@ export function AgentProfilesLocalView() {
+         onSaveControlChange={setSaveControl}
+       />
+ 
++      {isOpenHands && (
++        <div className="flex flex-col gap-3">
++          <label className="flex items-center gap-2">
++            <input
++              type="checkbox"
++              data-testid="agent-profile-custom-prompt"
++              checked={systemPrompt !== null}
++              onChange={(event) =>
++                setSystemPrompt(event.target.checked ? "" : null)
++              }
++            />
++            {t("SETTINGS$CUSTOM_SYSTEM_PROMPT")}
++          </label>
++          <p className="text-sm text-tertiary-light">
++            {t("SETTINGS$CUSTOM_SYSTEM_PROMPT_HELP")}
++          </p>
++          {systemPrompt !== null && (
++            <textarea
++              aria-label={t("SETTINGS$CUSTOM_SYSTEM_PROMPT")}
++              data-testid="agent-profile-system-prompt"
++              rows={14}
++              className="w-full rounded border border-tertiary bg-transparent p-3 font-mono text-sm"
++              value={systemPrompt}
++              onChange={(event) => setSystemPrompt(event.target.value)}
++            />
++          )}
++        </div>
++      )}
++
+       {/* OpenHands profiles reference an LLM profile (required). */}
+       {isOpenHands &&
+         (llmProfiles.length > 0 ? (
+diff --git a/src/hooks/mutation/use-create-conversation.ts b/src/hooks/mutation/use-create-conversation.ts
+index 225cd0227d3db9fc1a788d71cc7517aeb315b855..000c054586b0d1dba83e379b11b1231345913d10 100644
+--- a/src/hooks/mutation/use-create-conversation.ts
++++ b/src/hooks/mutation/use-create-conversation.ts
+@@ -221,6 +221,7 @@ export const useCreateConversation = () => {
+       // fail closed by preserving the profile id and letting Agent Server return
+       // the underlying profile-resolution error.
+       let profileAllowsAgentSettingsFallback = true;
++      let customPromptFallbackBlocked = false;
+       if (prefersAgentSettingsFallback && resolvedAgentProfile) {
+         try {
+           // Revalidate stale cached details: policy may have changed since the
+@@ -235,13 +236,40 @@ export const useCreateConversation = () => {
+               AgentProfilesService.getProfile(resolvedAgentProfile.name),
+             ...AGENT_PROFILES_RETRY_OPTIONS,
+           });
+-          const secretRefs = (detail.profile as { secret_refs?: unknown })
+-            .secret_refs;
+-          profileAllowsAgentSettingsFallback = !Array.isArray(secretRefs);
++          if (
++            detail.profile.agent_kind === "openhands" &&
++            detail.profile.system_prompt != null
++          ) {
++            // A custom base prompt must never disappear into global settings.
++            // The seeded `default` profile can use the profile path too, provided
++            // the model shown in the home picker matches its configured model.
++            const llm = await queryClient.ensureQueryData({
++              queryKey: [...LLM_PROFILES_QUERY_KEYS.all, backend.id, orgId],
++              queryFn: ProfilesService.listProfiles,
++              retry: false,
++            });
++            const ref = detail.profile.llm_profile_ref;
++            customPromptFallbackBlocked =
++              !llm.profiles.some((profile) => profile.name === ref) ||
++              (!agentProfileId &&
++                !!llm.active_profile &&
++                llm.active_profile !== ref);
++            profileAllowsAgentSettingsFallback = false;
++          } else {
++            const secretRefs = (detail.profile as { secret_refs?: unknown })
++              .secret_refs;
++            profileAllowsAgentSettingsFallback = !Array.isArray(secretRefs);
++          }
+         } catch {
+           profileAllowsAgentSettingsFallback = false;
+         }
+       }
++      if (customPromptFallbackBlocked) {
++        throw new Error(
++          "This agent has a custom system prompt. Select its configured LLM " +
++            "profile before starting a chat, or change the LLM in the agent profile.",
++        );
++      }
+       const effectiveAgentProfileId =
+         prefersAgentSettingsFallback && profileAllowsAgentSettingsFallback
+           ? undefined
+diff --git a/src/i18n/translation.json b/src/i18n/translation.json
+index 90627f4f58c76924bbd09d89ece8ce584567575b..7a4af9e7062ea775658e8126a09d3748eea8c431 100644
+--- a/src/i18n/translation.json
++++ b/src/i18n/translation.json
+@@ -1,4 +1,38 @@
+ {
++  "SETTINGS$CUSTOM_SYSTEM_PROMPT": {
++    "en": "Use a custom system prompt",
++    "ja": "カスタムシステムプロンプトを使用",
++    "zh-CN": "使用自定义系统提示词",
++    "zh-TW": "使用自訂系統提示詞",
++    "ko-KR": "사용자 지정 시스템 프롬프트 사용",
++    "no": "Bruk en egendefinert systemprompt",
++    "ar": "استخدام موجه نظام مخصص",
++    "de": "Eigenen Systemprompt verwenden",
++    "fr": "Utiliser une instruction système personnalisée",
++    "it": "Usa un prompt di sistema personalizzato",
++    "pt": "Usar um prompt de sistema personalizado",
++    "es": "Usar un prompt de sistema personalizado",
++    "ca": "Utilitza un prompt de sistema personalitzat",
++    "tr": "Özel sistem istemi kullan",
++    "uk": "Використовувати власний системний промпт"
++  },
++  "SETTINGS$CUSTOM_SYSTEM_PROMPT_HELP": {
++    "en": "Replaces the built-in base prompt for new conversations. Empty text removes the base prompt. Skills, runtime context and any existing suffix still apply. Disable to restore the standard prompt.",
++    "ja": "新しい会話の組み込み基本プロンプトを置き換えます。空欄にすると基本プロンプトを削除します。スキル、実行時コンテキスト、既存の接尾辞は引き続き適用されます。無効にすると標準プロンプトに戻ります。",
++    "zh-CN": "替换新对话的内置基础提示词。留空将移除基础提示词。技能、运行时上下文和现有后缀仍然有效。关闭后恢复默认提示词。",
++    "zh-TW": "取代新對話的內建基礎提示詞。留空將移除基礎提示詞。技能、執行階段上下文和現有後綴仍然有效。關閉後恢復預設提示詞。",
++    "ko-KR": "새 대화의 기본 프롬프트를 대체합니다. 비워 두면 기본 프롬프트가 제거됩니다. 스킬, 런타임 컨텍스트 및 기존 접미사는 계속 적용됩니다. 끄면 표준 프롬프트로 복원됩니다.",
++    "no": "Erstatter den innebygde grunnprompten for nye samtaler. Tom tekst fjerner grunnprompten. Ferdigheter, kjøretidskontekst og eksisterende suffiks gjelder fortsatt. Deaktiver for å gjenopprette standardprompten.",
++    "ar": "يستبدل الموجه الأساسي المدمج للمحادثات الجديدة. النص الفارغ يزيل الموجه الأساسي. تظل المهارات وسياق التشغيل واللاحقة الحالية سارية. عطّل الخيار لاستعادة الموجه الافتراضي.",
++    "de": "Ersetzt den eingebauten Basisprompt für neue Gespräche. Leerer Text entfernt ihn. Skills, Laufzeitkontext und bestehende Suffixe gelten weiterhin. Deaktivieren stellt den Standardprompt wieder her.",
++    "fr": "Remplace le prompt de base intégré pour les nouvelles conversations. Un texte vide le supprime. Les compétences, le contexte d’exécution et le suffixe existant restent actifs. Désactivez pour rétablir le prompt standard.",
++    "it": "Sostituisce il prompt di base nelle nuove conversazioni. Un testo vuoto lo rimuove. Competenze, contesto di esecuzione e suffisso esistente restano attivi. Disattiva per ripristinare il prompt standard.",
++    "pt": "Substitui o prompt base nas novas conversas. Texto vazio remove o prompt base. Habilidades, contexto de execução e sufixo existente continuam ativos. Desative para restaurar o prompt padrão.",
++    "es": "Sustituye el prompt base en las conversaciones nuevas. Un texto vacío lo elimina. Las habilidades, el contexto de ejecución y el sufijo existente siguen activos. Desactiva para restaurar el prompt estándar.",
++    "ca": "Substitueix el prompt base en les converses noves. Un text buit l’elimina. Les habilitats, el context d’execució i el sufix existent continuen actius. Desactiva per restaurar el prompt estàndard.",
++    "tr": "Yeni konuşmalardaki yerleşik temel istemi değiştirir. Boş metin temel istemi kaldırır. Beceriler, çalışma zamanı bağlamı ve mevcut sonek geçerliliğini korur. Standart istemi geri yüklemek için kapatın.",
++    "uk": "Замінює вбудований базовий промпт у нових розмовах. Порожній текст прибирає його. Навички, контекст виконання та наявний суфікс залишаються. Вимкніть, щоб повернути стандартний промпт."
++  },
+   "AUTOMATIONS$UNAVAILABLE_AGENT_PROFILE": {
+     "en": "Unavailable profile ({{id}})",
+     "ja": "利用できないプロファイル ({{id}})",

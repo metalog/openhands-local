@@ -1,0 +1,40 @@
+diff --git a/sdk/guides/agent-settings.mdx b/sdk/guides/agent-settings.mdx
+index 07859e741b081e3b77fc6adab7889a93513d8e72..1fce734055e15a3af2d0a6a03b4eceedda5a0308 100644
+--- a/sdk/guides/agent-settings.mdx
++++ b/sdk/guides/agent-settings.mdx
+@@ -210,3 +210,35 @@ print(f"\nEXAMPLE_COST: {cost}")
+ - **[Getting Started](/sdk/getting-started)** - Start from a minimal agent and conversation setup
+ - **[Context Condenser](/sdk/guides/context-condenser)** - Control conversation compaction behavior
+ - **[TaskToolSet](/sdk/guides/task-tool-set)** - Compose specialized sub-agents for larger tasks
++
++## Per-Profile Base System Prompt (Local Patch)
++
++The local `per-profile-system-prompt-v1` patch adds `system_prompt` to
++`OpenHandsAgentProfile` and `OpenHandsAgentSettings`. This is a local extension,
++not a feature of the unmodified 1.49.1 release.
++
++- `None` (JSON `null`) uses the SDK's built-in base prompt.
++- A string replaces that base prompt verbatim; it is not rendered as Jinja.
++- An empty string intentionally removes the static base prompt.
++
++```python
++from openhands.sdk.profiles import OpenHandsAgentProfile
++
++corpus = OpenHandsAgentProfile(
++    name="corpus",
++    llm_profile_ref="local-model",
++    system_prompt="Use the corpus tools and cite the retrieved sources.",
++    mcp_server_refs=["corpus"],
++)
++```
++
++Profile resolution passes this value to the existing `Agent(system_prompt=...)`
++constructor. Skills, runtime context and `system_message_suffix` remain separate
++parts of the initial system context. Existing conversations retain their saved
++agent and system prompt; profile edits affect newly created conversations.
++ACP profiles do not accept this field.
++
++The patched local Canvas editor exposes a checkbox and multiline text field.
++For a custom prompt, select the agent profile's configured LLM before starting a
++chat. Canvas rejects a conflicting selection rather than silently falling back
++to global agent settings and losing the custom prompt.
